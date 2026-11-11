@@ -1,0 +1,73 @@
+From aa9464750af6a6cd758eb69a7542743fafffcc7c Mon Sep 17 00:00:00 2001
+From: build <build@local>
+Date: Wed, 21 Oct 2026 02:16:59 +0000
+Subject: [PATCH] [XPU] Muse Spark: run the ROCm Triton/fused-MoE stack on XPU
+
+---
+ vllm/models/muse_spark/__init__.py      |  3 ++-
+ vllm/models/muse_spark/amd/model.py     | 14 ++++++++++++--
+ vllm/models/muse_spark/common/dspark.py |  2 +-
+ 3 files changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/models/muse_spark/__init__.py b/vllm/models/muse_spark/__init__.py
+index 84b33c8741..92c9538047 100644
+--- a/vllm/models/muse_spark/__init__.py
++++ b/vllm/models/muse_spark/__init__.py
+@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
+ 
+ from vllm.platforms import current_platform
+ 
+-if TYPE_CHECKING or not current_platform.is_rocm():
++# XPU reuses the ROCm stack: its BF16 path is Triton + generic fused-MoE only.
++if TYPE_CHECKING or not (current_platform.is_rocm() or current_platform.is_xpu()):
+     from .nvidia.model import MuseSpark1xForCausalLM
+     from .nvidia.multimodal import MuseSparkForConditionalGeneration
+ else:
+diff --git a/vllm/models/muse_spark/amd/model.py b/vllm/models/muse_spark/amd/model.py
+index a7cab57fe0..e5c15a0cc3 100644
+--- a/vllm/models/muse_spark/amd/model.py
++++ b/vllm/models/muse_spark/amd/model.py
+@@ -58,7 +58,16 @@ from vllm.models.muse_spark.common.ops.fused_rmsnorm import (
+     fused_norm_residual_norm_fwd,
+     supports_norm_residual_norm,
+ )
+-from vllm.platforms.rocm import on_gfx950
++from vllm.platforms import current_platform
++
++if current_platform.is_rocm():
++    from vllm.platforms.rocm import on_gfx950
++else:
++
++    def on_gfx950() -> bool:
++        return False
++
++
+ from vllm.sequence import IntermediateTensors
+ from vllm.third_party.flash_linear_attention.ops.fused_norm_gate import (
+     rms_norm_gated,
+@@ -533,7 +542,8 @@ class MuseSpark1xAttention(nn.Module):
+ 
+         # Needs a model-written KV cache (ROCM_AITER_FA without shuffle layout).
+         self.fused_qk_norm_rope_kv_insert = (
+-            self.use_qk_norm
++            current_platform.is_rocm()
++            and self.use_qk_norm
+             and self.qk_norm is not None
+             and not self.qk_norm.has_weight
+             and not self.use_attn_temperature_tuning
+diff --git a/vllm/models/muse_spark/common/dspark.py b/vllm/models/muse_spark/common/dspark.py
+index 884c807a21..ccb589737b 100644
+--- a/vllm/models/muse_spark/common/dspark.py
++++ b/vllm/models/muse_spark/common/dspark.py
+@@ -36,7 +36,7 @@ from vllm.models.muse_spark.common.layers import (
+ from vllm.platforms import current_platform
+ from vllm.transformers_utils.configs.muse_spark import MuseSparkDSparkConfig
+ 
+-if TYPE_CHECKING or not current_platform.is_rocm():
++if TYPE_CHECKING or not (current_platform.is_rocm() or current_platform.is_xpu()):
+     from vllm.models.muse_spark.nvidia.model import MuseSpark1xDecoderLayer
+ else:
+     from vllm.models.muse_spark.amd.model import (  # type: ignore[assignment]
+-- 
+2.43.0
+
