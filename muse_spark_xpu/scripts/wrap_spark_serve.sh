@@ -51,8 +51,7 @@ ARGS=(
   --distributed-executor-backend mp --nnodes ${NNODES} --node-rank ${NODE_RANK}
   --master-addr ${MASTER_ADDR} --master-port ${MASTER_PORT}
   --tensor-parallel-size 8 --pipeline-parallel-size ${NNODES}
-  --max-model-len 4096 --max-num-seqs 128 --max-num-batched-tokens 2048
-  --gpu-memory-utilization 0.90 --enforce-eager --no-enable-prefix-caching
+  --max-num-batched-tokens 2048 --gpu-memory-utilization 0.90 --enforce-eager --no-enable-prefix-caching
   --limit-mm-per-prompt '{"image":1,"audio":0,"video":0}' --seed 0
   --safetensors-load-strategy lazy
   # DRAM nodes 0/1, not the CPU-HBM nodes 2/3: HBM is 64 GB and its DRAM fallback can hang.
@@ -60,6 +59,12 @@ ARGS=(
   --numa-bind-cpus 2-9,106-113 10-17,114-121 18-25,122-129 26-33,130-137
                    54-61,158-165 62-69,166-173 70-77,174-181 78-85,182-189
 )
+if [ ${MODE} = serve ]; then
+  ARGS+=(--max-model-len 65536 --max-num-seqs 16
+         --enable-auto-tool-choice --tool-call-parser muse --reasoning-parser muse)
+else
+  ARGS+=(--max-model-len 4096 --max-num-seqs 128)
+fi
 if [ ${NODE_RANK} -eq 0 ]; then ARGS+=(--host 0.0.0.0 --port ${PORT}); else ARGS+=(--headless); fi
 
 echo "host=$(hostname) node_rank=${NODE_RANK} model=${MODEL}"
@@ -88,6 +93,21 @@ curl -s localhost:${PORT}/v1/chat/completions -H 'Content-Type: application/json
 python -c 'import json,sys; r=json.load(open(sys.argv[1])); print("SMOKE", r["usage"], repr(r["choices"][0]["message"]["content"][-200:]))' \
   ${OUT}/smoke.json >> $SUM 2>&1 || head -c 500 ${OUT}/smoke.json >> $SUM
 echo "SMOKE took $((SECONDS - t1)) s" >> $SUM
+
+if [ ${MODE} = serve ]; then
+  H=$(hostname -s)
+  cat > ${OUT}/endpoint.txt <<EOF
+# Muse Spark, job ${PBS_JOBID:-?}, up until walltime. Use from a login node or a client node in the job:
+#   source endpoint.txt; curl \$OPENAI_BASE_URL/models
+export OPENAI_BASE_URL=http://${H}:${PORT}/v1
+export OPENAI_API_KEY=EMPTY
+export OPENAI_MODEL=${NAME}
+export no_proxy=${H},\${no_proxy:-} NO_PROXY=${H},\${NO_PROXY:-}
+EOF
+  cat ${OUT}/endpoint.txt >> $SUM
+  wait $PID
+  exit
+fi
 
 for C in ${BENCH_CONC//,/ }; do
   timeout 1800 vllm bench serve --base-url http://127.0.0.1:${PORT} --model ${NAME} --tokenizer ${MODEL} \
