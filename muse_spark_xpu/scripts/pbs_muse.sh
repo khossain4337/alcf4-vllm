@@ -29,12 +29,16 @@ WALLTIME="${WALLTIME:-02:00:00}"   # carried into the dirty-node requeue
 ATTEMPT="${ATTEMPT:-1}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 RESIDUE_LIMIT_MIB="${RESIDUE_LIMIT_MIB:-700}"
-KIT=/flare/Aurora_deployment/jsasswis/muse_spark_xpu
+ROOT=/lus/flare/projects/datasets/softwares/testing/vllm_bench_alcf4
+KIT="${KIT:-${ROOT}/alcf4-vllm/muse_spark_xpu}"   # PBS runs a spooled copy, so no $0
 SELF="${KIT}/scripts/pbs_muse.sh"
-MU="${MU:-$HOME/muse_spark_work}"       # must match env.sh (venvs live here)
-HUB="${HF_HUB_CACHE:-/lus/flare/projects/Intel-Aurora/datasets/huggingface/hub}"
-PBS_ACCOUNT="${PBS_ACCOUNT:-Intel-Aurora}"
+MU="${MU:-${ROOT}/muse_work}"       # must match env.sh (venvs live here)
+HF_HOME="${HF_HOME:-/lus/flare/projects/datasets/model-weights}"
+HUB="${HF_HUB_CACHE:-${HF_HOME}/hub}"
+PBS_ACCOUNT="${PBS_ACCOUNT:-datascience}"
 SC=${KIT}/scripts
+SPARK_REPO=${HUB}/models--meta-models--Muse-Spark-Open-816B-A42B
+SPARK=${SPARK_REPO}/snapshots/$(cat ${SPARK_REPO}/refs/main)
 
 case "${MODEL_KEY}" in
   # glimmer_tp2 / glimmer_tp4: the WW36 1-node reporting ladder (ISL=OSL=1000, online,
@@ -69,7 +73,7 @@ case "${MODEL_KEY}" in
     TP=4; PP=1; NODES=1; MASK=0,1,2,3
     ;;
   spark)
-    MODEL=${HUB}/models--unsloth--Muse-Spark-Open-816B-A42B/snapshots/49cade7b0c6ed297f0434229ac67eea5f9ae1220
+    MODEL=${SPARK}
     MODEL_TAG=MuseSpark816B
     VENV=${MU}/venv_spark
     TP=8; PP=4; NODES=4; MASK=0,1,2,3,4,5,6,7
@@ -81,7 +85,7 @@ case "${MODEL_KEY}" in
     # Job 8949364 (4 nodes): weights 51.36 GiB/rank on 15-layer stages, 54.41 on 16-layer
     # (~3.05 GiB/layer/rank), KV -3.67 GiB after profiling -> "No available memory for the
     # cache blocks". util 0.95 only buys ~3 GiB. PP=5 caps a stage at 13 layers (~40 GiB).
-    MODEL=${HUB}/models--unsloth--Muse-Spark-Open-816B-A42B/snapshots/49cade7b0c6ed297f0434229ac67eea5f9ae1220
+    MODEL=${SPARK}
     MODEL_TAG=MuseSpark816B
     VENV=${MU}/venv_spark
     TP=8; PP=5; NODES=5; MASK=0,1,2,3,4,5,6,7
@@ -92,7 +96,7 @@ case "${MODEL_KEY}" in
   # online Glimmer tables (offline reads higher: whole batch submitted at once).
   # Per-submodule decode attribution on the best layout (spark_profile.py + spark_timing.py).
   spark5_profile)
-    MODEL=${HUB}/models--unsloth--Muse-Spark-Open-816B-A42B/snapshots/49cade7b0c6ed297f0434229ac67eea5f9ae1220
+    MODEL=${SPARK}
     MODEL_TAG=MuseSpark816B
     VENV=${MU}/venv_spark
     PROFILE=1
@@ -103,7 +107,7 @@ case "${MODEL_KEY}" in
   #   spark5_onebatch: max_concurrent_batches=1 (whole batch per step, no PP micro-batches)
   #   spark5_graph   : XPUGraph FULL_DECODE_ONLY instead of eager (the 405B-proven setting)
   spark5_onebatch|spark5_graph)
-    MODEL=${HUB}/models--unsloth--Muse-Spark-Open-816B-A42B/snapshots/49cade7b0c6ed297f0434229ac67eea5f9ae1220
+    MODEL=${SPARK}
     MODEL_TAG=MuseSpark816B_${MODEL_KEY#spark5_}
     VENV=${MU}/venv_spark
     BENCH=1
@@ -117,7 +121,7 @@ case "${MODEL_KEY}" in
     esac
     ;;
   spark5_bench|spark4x12_bench|spark6_bench)
-    MODEL=${HUB}/models--unsloth--Muse-Spark-Open-816B-A42B/snapshots/49cade7b0c6ed297f0434229ac67eea5f9ae1220
+    MODEL=${SPARK}
     MODEL_TAG=MuseSpark816B
     VENV=${MU}/venv_spark
     BENCH=1
@@ -139,7 +143,8 @@ esac
 
 # 25.190.0/support/tools/xpu-smi/1.2.42 is GONE on the 26.181.0 image: it read blank on every
 # tile and the gate passed blind (jobs 8949363/8949364). This is the module xpu-smi/1.2.43.
-XPUSMI_BASE=/opt/aurora/26.181.0/spack/unified/1.1.1/install/linux-x86_64/xpu-smi-1.2.43-d4w7vpf
+# Subshell: the module's grpc/protobuf LD_LIBRARY_PATH must not leak into the run.
+XPUSMI_BASE=$(module load xpu-smi >/dev/null 2>&1; echo "${XPU_SMI_ROOT}")
 XPUSMI_ENV="LD_LIBRARY_PATH=${XPUSMI_BASE}/lib64:${XPUSMI_BASE}/lib"
 read_tile () {  # $1=device $2=tile -> MiB on stdout
     env -u ZE_AFFINITY_MASK ${XPUSMI_ENV} ${XPUSMI_BASE}/bin/xpu-smi dump -d "$1" -t "$2" -m 18 -i 1 -n 1 \
@@ -171,7 +176,7 @@ if awk -v a="$WORST" -v b="$RESIDUE_LIMIT_MIB" 'BEGIN{exit !(a>b)}'; then
     echo "DIRTY NODE: ${WORST_WHERE} holds ${WORST} MiB."
     if [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; then
         qsub -A ${PBS_ACCOUNT} -q capacity -l select=${NODES}:ncpus=208 -l walltime=${WALLTIME} \
-             -l filesystems=home:flare -N "mu-${MODEL_KEY}" \
+             -l filesystems=home:flare -l place=scatter -k doe -j oe -o ${ROOT}/outdir_aurora -N "mu-${MODEL_KEY}" \
              -v MODEL_KEY=${MODEL_KEY},ATTEMPT=$(( ATTEMPT + 1 )),MAX_ATTEMPTS=${MAX_ATTEMPTS},RESIDUE_LIMIT_MIB=${RESIDUE_LIMIT_MIB},WALLTIME=${WALLTIME} \
              "${SELF}" || echo "WARNING: requeue failed. Resubmit by hand."
     fi
@@ -201,8 +206,7 @@ export CCL_PROCESS_LAUNCHER=none        # module sets pmix; neither mp nor the w
 export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 export GLOO_SOCKET_IFNAME=hsn0 TP_SOCKET_IFNAME=hsn0
 
-export HF_HOME=/lus/flare/projects/Intel-Aurora/datasets/huggingface
-export HF_HUB_CACHE=${HUB}
+export HF_HOME HF_HUB_CACHE=${HUB}
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 
 export VLLM_CACHE_ROOT=${MU}/.vllm_cache;   mkdir -p "${VLLM_CACHE_ROOT}"
