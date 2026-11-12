@@ -225,7 +225,7 @@ if [[ "${MODEL_KEY}" == glimmer* ]]; then
     bash ${SC}/run_new_model_bringup.sh
     RC=$?
 else
-    NNODES=$(wc -l < $PBS_NODEFILE)
+    NNODES=${NODES}   # the job may hold more nodes; mpiexec uses only the first NODES
     HEAD_NODE=$(head -n1 $PBS_NODEFILE | sed 's/\..*//')
     export MASTER_ADDR=$(getent hosts "${HEAD_NODE}.hsn.cm.aurora.alcf.anl.gov" | awk 'NR==1{print $1}')
     [ -z "${MASTER_ADDR}" ] && export MASTER_ADDR=$(head -n1 $PBS_NODEFILE | sed 's/hostmgmt/hsn/')
@@ -235,6 +235,7 @@ else
     RUN_TAG=spark_offline_${KIND}_tp${TP}_pp${PP}$([[ "${MODEL_KEY}" == spark5_onebatch || "${MODEL_KEY}" == spark5_graph ]] && echo _${MODEL_KEY#spark5_})${TAG:+_${TAG}}
     OUT=${ROOT}/RUNS/${RUN_TAG}_$(date '+%Y-%m-%d_%H%M%S')_j${PBS_JOBID%%.*}
     mkdir -p ${OUT}
+    head -n ${NODES} $PBS_NODEFILE > ${OUT}/hosts
     echo "nodes=${NNODES} ranks=${RANKS} ppn=${RPN} MASTER_ADDR=${MASTER_ADDR} partition=${VLLM_PP_LAYER_PARTITION}"
     echo "log: ${OUT}/smoke.log"
     # Same CPU / CCL-worker binding as the DeepSeek runs (run_bench_sweep_v024.sh).
@@ -243,7 +244,7 @@ else
     echo "CPU_BIND=${CPU_BIND} CCL_WORKER_AFFINITY=${CCL_WORKER_AFFINITY}"
     if [[ -n "${PROFILE:-}" ]]; then
         echo "log: ${OUT}/profile.log"
-        mpiexec --cpu-bind ${CPU_BIND} -n ${RANKS} -ppn ${RPN} -env PALS_WORLD_SIZE=${RANKS} \
+        mpiexec --hostfile ${OUT}/hosts --cpu-bind ${CPU_BIND} -n ${RANKS} -ppn ${RPN} -env PALS_WORLD_SIZE=${RANKS} \
             ${SC}/wrap.sh python -u ${SC}/spark_profile.py --model ${MODEL} --tp ${TP} --pp ${PP} \
             --concurrencies 1,16,64 --decode-tokens 33 > ${OUT}/profile.log 2>&1
         RC=$?
@@ -261,7 +262,7 @@ else
         # max_num_seqs 128 = the top of the ladder; KV holds >=587k tokens vs 256k needed.
         BENCH_CONC="${BENCH_CONC:-1,16,32,64,128}"
         echo "log: ${OUT}/bench.log  conc=${BENCH_CONC}"
-        mpiexec --cpu-bind ${CPU_BIND} -n ${RANKS} -ppn ${RPN} -env PALS_WORLD_SIZE=${RANKS} \
+        mpiexec --hostfile ${OUT}/hosts --cpu-bind ${CPU_BIND} -n ${RANKS} -ppn ${RPN} -env PALS_WORLD_SIZE=${RANKS} \
             ${SC}/wrap.sh python -u ${BENCH_PY:-${SC}/bench_metrics.py} \
             --model ${MODEL} --tensor-parallel-size ${TP} --pipeline-parallel-size ${PP} \
             --distributed-executor-backend external_launcher \
@@ -282,7 +283,7 @@ else
         echo "MUSE RC=${RC} for ${MODEL_TAG}"
         exit 0
     fi
-    mpiexec --cpu-bind ${CPU_BIND} -n ${RANKS} -ppn ${RPN} -env PALS_WORLD_SIZE=${RANKS} \
+    mpiexec --hostfile ${OUT}/hosts --cpu-bind ${CPU_BIND} -n ${RANKS} -ppn ${RPN} -env PALS_WORLD_SIZE=${RANKS} \
         ${SC}/wrap.sh python -u ${SC}/spark_smoke.py --model ${MODEL} --tp ${TP} --pp ${PP} \
         > ${OUT}/smoke.log 2>&1
     RC=$?
