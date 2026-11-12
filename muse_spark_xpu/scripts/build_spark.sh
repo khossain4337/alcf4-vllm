@@ -15,6 +15,7 @@ cd ${MU}/src
 cd vllm_spark
 git fetch -q origin main; git checkout -q -B spark_xpu e8ae84bf7e992c63570905fce3073fd7a7de2412
 git apply --index ${KIT}/patches/muse_spark_pr61879_xpu_on_vllm_main_e8ae84bf7.patch
+git apply --index ${KIT}/patches/pp_one_batch_e8ae84bf7.patch
 git -c user.name=muse-kit -c user.email=muse-kit@local commit -q -m "Muse Spark: PR #61879 + XPU port" || true
 git log -1 --format='spark_xpu %H %s' | tee ${MU}/logs/commits_spark.txt
 export VLLM_TARGET_DEVICE=xpu

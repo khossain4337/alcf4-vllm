@@ -1,0 +1,12 @@
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -579,6 +579,9 @@
+ 
+     @property
+     def max_concurrent_batches(self) -> int:
++        # Aurora: PP micro-batches do not overlap on XPU; one batch is 3-4x faster.
++        if os.environ.get("VLLM_PP_ONE_BATCH") == "1":
++            return 1
+         # PP requires PP-size concurrent batches to fill the pipeline.
+         # Async scheduling requires 2 concurrent batches to overlap.
+         pp_size = self.parallel_config.pipeline_parallel_size

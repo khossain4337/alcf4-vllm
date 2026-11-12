@@ -14,6 +14,10 @@ export BENCH_CONC=${BENCH_CONC:-1,16,64} MODE=${MODE:-bench}
 
 module load frameworks/2026.1.0 >/dev/null 2>&1     # never pipe: conda activate dies in a subshell
 source ${MU}/venv_spark/bin/activate
+if [ "${VLLM_PP_ONE_BATCH:-}" = 1 ]; then
+  grep -q VLLM_PP_ONE_BATCH $(python -c 'import vllm,os; print(os.path.dirname(vllm.__file__))')/config/vllm.py \
+    || { echo "VLLM_PP_ONE_BATCH=1 but venv_spark lacks patches/pp_one_batch_e8ae84bf7.patch"; exit 1; }
+fi
 
 export NNODES=${SERVE_NODES:-5}
 case ${NNODES} in
@@ -25,7 +29,7 @@ export VLLM_PP_LAYER_PARTITION=${VLLM_PP_LAYER_PARTITION:-$P}
 HEAD=$(head -n1 $PBS_NODEFILE | sed 's/\..*//')
 export MASTER_ADDR=$(getent hosts "${HEAD}.hsn.cm.aurora.alcf.anl.gov" | awk 'NR==1{print $1}')
 export MASTER_PORT=29500
-RUN_TAG=spark_online_${MODE}_tp8_pp${NNODES}${TAG:+_${TAG}}
+RUN_TAG=spark_online_${MODE}_tp8_pp${NNODES}$([ "${VLLM_PP_ONE_BATCH:-}" = 1 ] && echo _onebatch)${TAG:+_${TAG}}
 export OUT=${ROOT}/RUNS/${RUN_TAG}_$(date '+%Y-%m-%d_%H%M%S')_j${PBS_JOBID%%.*}
 mkdir -p ${OUT}
 head -n ${NNODES} $PBS_NODEFILE > ${OUT}/hosts
