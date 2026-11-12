@@ -38,6 +38,6 @@ echo "client nodes: $(tail -n +$((NNODES + 1)) $PBS_NODEFILE | sed 's/\..*//' | 
 echo "out=${OUT}"
 
 # --cpu-bind none: vLLM's --numa-bind places the workers; mpiexec binding traps them on one core.
-mpiexec --hostfile ${OUT}/hosts -n ${NNODES} -ppn 1 --cpu-bind none bash ${KIT}/scripts/wrap_spark_serve.sh
+mpiexec --hostfile ${OUT}/hosts -n ${NNODES} -ppn 1 --cpu-bind none bash ${KIT}/scripts/${WRAP:-wrap_spark_serve.sh}
 echo "mpiexec rc=$?"
 cat ${OUT}/summary.txt
