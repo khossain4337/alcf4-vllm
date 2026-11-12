@@ -4,6 +4,7 @@ Muse Spark (816B MoE, BF16) runs on 5 Aurora nodes: TP8 inside a node, PP5 acros
 You get an OpenAI-compatible `vllm serve` endpoint. No build needed.
 
 > Draft. Marked **(unverified)** = not yet run end to end on Aurora.
+> Verified 2026-11-12 (jobs 9080338, 9080340): serve job, client checks, tools, reasoning, image, 768k length.
 
 ## 1. What you need
 
@@ -25,9 +26,17 @@ export VLLM_PP_ONE_BATCH=1          # one batch through the pipeline, no micro-b
 
 | Setting | Conc 16 output (ISL = OSL = 1000) |
 |---|---|
-| V1 + one batch (use this) | 75.8 tok/s |
+| V1 + one batch (use this) | 75.6 tok/s |
 | V2 + one batch | 18.1 tok/s |
 | V2 + stock micro-batching | 22.1 tok/s |
+
+V1 + one batch, output tok/s (TPOT):
+
+| Conc | ISL = OSL = 1000 | ISL = OSL = 5192 |
+|---|---|---|
+| 1 | 5.9 (169 ms) | 5.8 (171 ms) |
+| 16 | 75.6 (201 ms) | 76.4 (200 ms) |
+| 64 | 170.9 (336 ms) | 230.8 (243 ms) |
 
 - One batch helps because PP micro-batches do not overlap on Aurora. Unset it to get stock vLLM.
 - Why: `<root>/EXPLAINER_pp_one_batch.md`.
@@ -39,12 +48,12 @@ Easiest: copy our job script and submit it.
 
 ```bash
 K=/lus/flare/projects/datasets/softwares/testing/vllm_bench_alcf4/alcf4-vllm/muse_spark_xpu
-cp $K/qsub_spark_online_serve.sh ~/my_spark.sh   # edit -A, -o, -e; KEEP_SERVING=1 to keep it up
+cp $K/qsub_spark_online_serve.sh ~/my_spark.sh   # edit -A, -o, -e; KEEP_SERVING=1 to keep it up (unverified)
 qsub ~/my_spark.sh
 ```
 
-- Nodes 1–5 serve; node 6 runs the section 4 examples as checks (`scripts/client_check.py`) **(unverified)**.
-- The run dir gets `endpoint.txt`; `source` it on any node in the job.
+- Nodes 1–5 serve; node 6 runs the section 4 examples as checks (`scripts/client_check.py`) and writes `client_check.txt`.
+- The run dir gets `endpoint.txt`; `source` it on any node in the job. Access from a login node is untested.
 - Start-up takes ~22–25 min (weight load ~13 min). Plan walltime for it.
 - Logs: one dir per job under `<root>/RUNS/` (`ROOT` in `scripts/pbs_muse_opt.sh`); read `summary.txt` first.
 
@@ -86,7 +95,7 @@ print(r.choices[0].message.content)
 
 - Spark reasons before it answers. `reasoning_effort` defaults to xhigh; use `"low"` for quick tests and give `max_tokens` room.
 - Images: pass an `image_url` content part (one image per request).
-- Tool calls and a separate reasoning field need the serve script's `--tool-call-parser muse --reasoning-parser muse` **(unverified)**.
+- Tool calls and a separate reasoning field need the serve script's `--tool-call-parser muse --reasoning-parser muse`. Both work; without them the reasoning lands in `content`.
 
 Benchmark:
 
@@ -100,7 +109,8 @@ vllm bench serve --base-url http://<node0>:8000 --model Muse-Spark --tokenizer <
 
 | Item | Value |
 |---|---|
-| Max context | 4096 in the bench script, 65536 in serve **(unverified)**; 131072 under test |
+| Max context | 786432 in the serve job; a 437k-token prompt passed. ~5 full-length requests fit in KV at once |
+| Prefill | ~0.9k tok/s: a 100k-token prompt waits ~2 min, 437k ~9 min |
 | Concurrency | `--max-num-seqs` 128 (bench), 16 (serve) |
 | Eager mode | `--enforce-eager`; no graphs on XPU yet |
 | Prefix caching | Off |
