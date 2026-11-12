@@ -60,10 +60,10 @@ ARGS=(
                    54-61,158-165 62-69,166-173 70-77,174-181 78-85,182-189
 )
 if [ ${MODE} = serve ]; then
-  ARGS+=(--max-model-len 65536 --max-num-seqs 16
+  ARGS+=(--max-model-len ${MAX_MODEL_LEN:-65536} --max-num-seqs 16
          --enable-auto-tool-choice --tool-call-parser muse --reasoning-parser muse)
 else
-  ARGS+=(--max-model-len 4096 --max-num-seqs 128)
+  ARGS+=(--max-model-len ${MAX_MODEL_LEN:-4096} --max-num-seqs 128)
 fi
 if [ ${NODE_RANK} -eq 0 ]; then ARGS+=(--host 0.0.0.0 --port ${PORT}); else ARGS+=(--headless); fi
 
@@ -84,6 +84,7 @@ until curl -fs localhost:${PORT}/v1/models | grep -q ${NAME}; do
 done
 touch $READY
 echo "READY after $((SECONDS - t0)) s" | tee -a $SUM
+grep -m1 -o "KV cache size.*" ${OUT}/node0.log >> $SUM
 
 t1=$SECONDS
 curl -s localhost:${PORT}/v1/chat/completions -H 'Content-Type: application/json' -d '{
@@ -97,7 +98,7 @@ echo "SMOKE took $((SECONDS - t1)) s" >> $SUM
 if [ ${MODE} = serve ]; then
   H=$(hostname -s)
   cat > ${OUT}/endpoint.txt <<EOF
-# Muse Spark, job ${PBS_JOBID:-?}, up until walltime. Use from a login node or a client node in the job:
+# Muse Spark, job ${PBS_JOBID:-?}. Use from a node in the same job:
 #   source endpoint.txt; curl \$OPENAI_BASE_URL/models
 export OPENAI_BASE_URL=http://${H}:${PORT}/v1
 export OPENAI_API_KEY=EMPTY
@@ -105,14 +106,15 @@ export OPENAI_MODEL=${NAME}
 export no_proxy=${H},\${no_proxy:-} NO_PROXY=${H},\${NO_PROXY:-}
 EOF
   cat ${OUT}/endpoint.txt >> $SUM
-  wait $PID
+  # Serves until walltime, or until pbs_muse_opt.sh touches .done (KEEP_SERVING=0).
+  until [ -f $DONE ] || ! kill -0 $PID 2>/dev/null; do sleep 10; done
   exit
 fi
 
 for C in ${BENCH_CONC//,/ }; do
   timeout 1800 vllm bench serve --base-url http://127.0.0.1:${PORT} --model ${NAME} --tokenizer ${MODEL} \
     --dataset-name random --random-input-len 1000 --random-output-len 1000 --ignore-eos \
-    --num-prompts ${C} --max-concurrency ${C} --seed 0 > ${OUT}/bench_c${C}.log 2>&1
+    --num-prompts ${C} --max-concurrency ${C} --seed 0 --temperature 0 > ${OUT}/bench_c${C}.log 2>&1
   rc=$?
   echo "BENCH conc=${C} rc=${rc} $(grep -E 'Output token throughput|Mean TTFT|Mean TPOT' ${OUT}/bench_c${C}.log | tr -s ' ' | tr '\n' ';')" >> $SUM
 done
