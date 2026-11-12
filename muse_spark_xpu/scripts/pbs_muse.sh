@@ -176,8 +176,8 @@ if awk -v a="$WORST" -v b="$RESIDUE_LIMIT_MIB" 'BEGIN{exit !(a>b)}'; then
     echo "DIRTY NODE: ${WORST_WHERE} holds ${WORST} MiB."
     if [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; then
         qsub -A ${PBS_ACCOUNT} -q capacity -l select=${NODES}:ncpus=208 -l walltime=${WALLTIME} \
-             -l filesystems=home:flare -l place=scatter -k doe -j oe -o ${ROOT}/outdir_aurora -N "mu-${MODEL_KEY}" \
-             -v MODEL_KEY=${MODEL_KEY},ATTEMPT=$(( ATTEMPT + 1 )),MAX_ATTEMPTS=${MAX_ATTEMPTS},RESIDUE_LIMIT_MIB=${RESIDUE_LIMIT_MIB},WALLTIME=${WALLTIME} \
+             -l filesystems=home:flare -l place=scatter -k doe -j oe -o ${ROOT}/RUNS/outdir_aurora -e ${ROOT}/RUNS/errordir_aurora -N "mu-${MODEL_KEY}" \
+             -v MODEL_KEY=${MODEL_KEY},ATTEMPT=$(( ATTEMPT + 1 )),MAX_ATTEMPTS=${MAX_ATTEMPTS},RESIDUE_LIMIT_MIB=${RESIDUE_LIMIT_MIB},WALLTIME=${WALLTIME}${TAG:+,TAG=${TAG}} \
              "${SELF}" || echo "WARNING: requeue failed. Resubmit by hand."
     fi
     exit 0
@@ -220,7 +220,7 @@ RC=0
 if [[ "${MODEL_KEY}" == glimmer* ]]; then
     export MODEL MODEL_TAG TP PP
     export EXPERT_PARALLEL=0 MAX_MODEL_LEN=8192 MM_SMOKE=1
-    export BASE_DIR=${MU}/results
+    export BASE_DIR=${ROOT}/RUNS
     export RUN_SWEEP="${RUN_SWEEP:-1}" PROBE_CONC="${PROBE_CONC:-${PROBE_CONC_DEFAULT:-16,32}}"
     bash ${SC}/run_new_model_bringup.sh
     RC=$?
@@ -231,7 +231,9 @@ else
     [ -z "${MASTER_ADDR}" ] && export MASTER_ADDR=$(head -n1 $PBS_NODEFILE | sed 's/hostmgmt/hsn/')
     export TP PP
     RANKS=$(( TP * PP )); RPN=$(( RANKS / NNODES ))
-    OUT=${MU}/results/$(date '+%Y-%m-%d_%H%M%S')_j${PBS_JOBID%%.*}_spark_tp${TP}_pp${PP}$([[ -n "${BENCH:-}" ]] && echo _bench)$([[ "${MODEL_KEY}" == spark5_onebatch || "${MODEL_KEY}" == spark5_graph ]] && echo _${MODEL_KEY#spark5_})$([[ -n "${PROFILE:-}" ]] && echo _profile)
+    KIND=smoke; [[ -n "${BENCH:-}" ]] && KIND=bench; [[ -n "${PROFILE:-}" ]] && KIND=profile
+    RUN_TAG=spark_offline_${KIND}_tp${TP}_pp${PP}$([[ "${MODEL_KEY}" == spark5_onebatch || "${MODEL_KEY}" == spark5_graph ]] && echo _${MODEL_KEY#spark5_})${TAG:+_${TAG}}
+    OUT=${ROOT}/RUNS/${RUN_TAG}_$(date '+%Y-%m-%d_%H%M%S')_j${PBS_JOBID%%.*}
     mkdir -p ${OUT}
     echo "nodes=${NNODES} ranks=${RANKS} ppn=${RPN} MASTER_ADDR=${MASTER_ADDR} partition=${VLLM_PP_LAYER_PARTITION}"
     echo "log: ${OUT}/smoke.log"

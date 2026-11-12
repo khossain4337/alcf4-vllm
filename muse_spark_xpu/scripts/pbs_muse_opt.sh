@@ -1,18 +1,8 @@
 #!/bin/bash
-#PBS -l select=5
-#PBS -l place=scatter
-#PBS -l walltime=02:00:00
-#PBS -q capacity
-#PBS -A datascience
-#PBS -l filesystems=home:flare
-#PBS -k doe
-#PBS -j oe
-#PBS -o /lus/flare/projects/datasets/softwares/testing/vllm_bench_alcf4/outdir_aurora
-#PBS -N spark_serve
-# Online multi-node `vllm serve` (mp) for Muse Spark, Servesh-style: one wrapper per node.
+# Run body; submit via ../qsub_spark_online_*.sh. Online multi-node `vllm serve` (mp) for Muse Spark, Servesh-style: one wrapper per node.
 # Serves on the first SERVE_NODES nodes (PP = SERVE_NODES, TP = 8); extra nodes are clients.
-#   -v MODE=bench (default): smoke + vllm bench serve, then exit
-#   -v MODE=serve          : agent flags, write endpoint.txt, serve until walltime
+#   MODE=bench (default): smoke + vllm bench serve, then exit
+#   MODE=serve          : agent flags, write endpoint.txt, serve until walltime
 
 ROOT=/lus/flare/projects/datasets/softwares/testing/vllm_bench_alcf4
 export KIT=${KIT:-${ROOT}/alcf4-vllm/muse_spark_xpu} MU=${MU:-${ROOT}/muse_work}
@@ -35,7 +25,8 @@ export VLLM_PP_LAYER_PARTITION=${VLLM_PP_LAYER_PARTITION:-$P}
 HEAD=$(head -n1 $PBS_NODEFILE | sed 's/\..*//')
 export MASTER_ADDR=$(getent hosts "${HEAD}.hsn.cm.aurora.alcf.anl.gov" | awk 'NR==1{print $1}')
 export MASTER_PORT=29500
-export OUT=${MU}/results/$(date '+%Y-%m-%d_%H%M%S')_j${PBS_JOBID%%.*}_spark_${MODE}_tp8_pp${NNODES}
+RUN_TAG=spark_online_${MODE}_tp8_pp${NNODES}${TAG:+_${TAG}}
+export OUT=${ROOT}/RUNS/${RUN_TAG}_$(date '+%Y-%m-%d_%H%M%S')_j${PBS_JOBID%%.*}
 mkdir -p ${OUT}
 head -n ${NNODES} $PBS_NODEFILE > ${OUT}/hosts
 echo "mode=${MODE} serve_nodes=${NNODES} partition=${VLLM_PP_LAYER_PARTITION} master=${MASTER_ADDR}"
